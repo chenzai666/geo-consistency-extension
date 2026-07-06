@@ -2,6 +2,113 @@
 
 一个 Chrome MV3 扩展，让浏览器暴露给网页的地区信号——地理位置、时区、语言——与当前网络出口 IP 保持一致。解决了常见的"VPN 在东京，但 `Intl.DateTimeFormat().resolvedOptions().timeZone` 还显示 `America/New_York`"这类不一致问题，这类不一致本身就是指纹识别信号。
 
+## 安装
+
+### 方式一：从 Chrome 应用商店安装（推荐）
+
+> 应用商店链接发布后更新此处。
+
+### 方式二：本地加载（开发者模式）
+
+1. 下载本仓库（`Code → Download ZIP` 或 `git clone`）
+2. 打开 Chrome，地址栏输入 `chrome://extensions`
+3. 右上角开启**开发者模式**
+4. 点击**加载已解压的扩展程序**，选择本仓库根目录（含 `manifest.json` 的那一层）
+5. 扩展图标出现在工具栏，安装完成
+
+---
+
+## 使用说明
+
+### 快速上手
+
+安装后扩展会**立即自动运行**——后台自动检测出口 IP、推算时区和语言、计算住宅坐标，无需任何手动操作。点击工具栏的扩展图标，弹窗中可看到当前生效的配置。
+
+### 弹窗界面说明
+
+```
+┌─────────────────────────────────────────┐
+│  Geo-Locale Consistency          [刷新]  │
+├─────────────────────────────────────────┤
+│  IP            203.0.113.42             │
+│  位置          Tokyo, Tokyo, Japan      │
+│  ISP           AS2527 NTT               │
+│  时区          Asia/Tokyo               │
+│  语言          ja-JP,ja;q=0.9,en;q=0.8  │
+│  坐标来源      overpass (35.68, 139.69) │
+│  Provider      ipapi.co                 │
+│  更新时间      2026/7/6 15:30:00        │
+├─────────────────────────────────────────┤
+│  [✓] 伪装位置   [✓] 伪装时区  [✓] 伪装语言 │
+├─────────────────────────────────────────┤
+│  精度          均衡（~500m）  ▼          │
+│  刷新间隔（分钟） 60                     │
+│  ipinfo.io token  ············          │
+├─────────────────────────────────────────┤
+│              [保存设置]                  │
+└─────────────────────────────────────────┘
+```
+
+| 控件 | 说明 |
+|---|---|
+| **刷新按钮**（右上角 ↻）| 立即重新检测出口 IP 并更新所有覆盖值 |
+| **伪装位置** | 开关：控制 `navigator.geolocation` 是否返回伪装坐标 |
+| **伪装时区** | 开关：控制 `Date`/`Intl` 时区相关 API 是否使用出口 IP 所在时区 |
+| **伪装语言** | 开关：控制 `navigator.language(s)` 和出站 `Accept-Language` 请求头 |
+| **精度** | 精确（~100m）/ 均衡（~500m）/ 城市级（~3000m），控制坐标偏移半径 |
+| **刷新间隔** | 自动重新检测出口 IP 的周期，最小 5 分钟，默认 60 分钟 |
+| **ipinfo.io token** | 可选，填写后提升 ipinfo.io 的请求配额（本地存储，不上传） |
+
+### 典型使用场景
+
+**场景 1：配合 VPN / 代理使用**
+
+切换 VPN 节点后，点一下弹窗右上角的**刷新按钮**，扩展重新检测新的出口 IP，几秒内所有网页看到的位置、时区、语言都会更新为新节点所在地区的数据。
+
+**场景 2：只伪装时区，不伪装位置**
+
+在弹窗中关闭"伪装位置"，只保留"伪装时区"开关。此时 `navigator.geolocation` 正常工作（询问系统 GPS），但 `Date.getTimezoneOffset()`、`Intl.DateTimeFormat` 的默认时区都指向出口 IP 所在时区。
+
+**场景 3：语言指纹消除**
+
+开启"伪装语言"后，`navigator.language`/`languages` 和 HTTP `Accept-Language` 请求头都会切换为出口 IP 所在国家的主流语言（如出口在德国则为 `de-DE,de;q=0.9,en;q=0.8`），减少语言与地区不一致的指纹特征。
+
+### 验证是否生效
+
+打开任意网页的开发者工具（F12）→ Console，执行以下代码验证：
+
+```js
+// 验证时区
+console.log(Intl.DateTimeFormat().resolvedOptions().timeZone);
+// 预期：出口 IP 所在地的 IANA 时区，如 "Asia/Tokyo"
+
+// 验证语言
+console.log(navigator.language, navigator.languages);
+// 预期：出口 IP 所在地的语言，如 "ja-JP" ["ja-JP","ja","en"]
+
+// 验证时区偏移（东京 JST = UTC+9，返回 -540）
+console.log(new Date().getTimezoneOffset());
+
+// 验证地理位置
+navigator.geolocation.getCurrentPosition(p =>
+  console.log(p.coords.latitude, p.coords.longitude)
+);
+// 预期：出口 IP 附近的住宅坐标（非精确，有偏移）
+```
+
+### 注意事项
+
+- **不要对银行、支付等敏感网站开启所有伪装**——位置/时区与账户注册地不一致可能触发风控。建议在 `chrome://extensions` → 扩展详情中将这类网站加入"不允许访问"列表。
+- **坐标有随机偏移**，每次刷新结果不同，这是有意设计（防止固定坐标被识别）。
+- 扩展更新出口 IP 信息需要访问几个公开的 IP 地理位置 API（见[隐私模型](#隐私模型)），请确保这些域名在代理规则中可正常访问：
+  - `ipapi.co`
+  - `ipwho.is`
+  - `freeipapi.com`
+  - `ipinfo.io`
+  - `overpass-api.de`（OpenStreetMap Overpass）
+
+---
+
 ## 工作原理
 
 1. **出口 IP 检测**（`lib/providers.js`、`background/service-worker.js`）：后台 Service Worker 依次请求 IP 地理位置 provider 链（`ipapi.co` → `ipwho.is` → `freeipapi.com` → `ipinfo.io`），取第一个成功返回的结果。保留国家码、城市/省份/国家、经纬度、ISP、IANA 时区。
