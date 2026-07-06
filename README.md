@@ -1,144 +1,77 @@
 # Geo-Locale Consistency
 
-A Chrome MV3 extension that keeps the browser's *visible* regional signals —
-geolocation, timezone, and language — consistent with wherever your traffic
-is currently egressing from. It exists to fix the common "VPN in Tokyo, but
-`Intl.DateTimeFormat().resolvedOptions().timeZone` still says
-`America/New_York`" mismatch, which is itself a fingerprinting/inconsistency
-signal.
+一个 Chrome MV3 扩展，让浏览器暴露给网页的地区信号——地理位置、时区、语言——与当前网络出口 IP 保持一致。解决了常见的"VPN 在东京，但 `Intl.DateTimeFormat().resolvedOptions().timeZone` 还显示 `America/New_York`"这类不一致问题，这类不一致本身就是指纹识别信号。
 
-## How it works
+## 工作原理
 
-1. **Egress detection** (`lib/providers.js`, `background/service-worker.js`):
-   the background service worker asks a chain of IP-geolocation providers
-   (`ipapi.co` → `ipwho.is` → `freeipapi.com` → `ipinfo.io`) who they think you
-   are, using the first one that returns a usable result. Country code,
-   city/region/country, latitude/longitude, ISP, and IANA timezone are kept
-   from whichever provider answered.
-2. **Residential coordinate resolution** (`lib/overpass.js`): the raw
-   provider lat/lon is usually a datacenter or ISP office, not a home address.
-   Before using it, the extension queries OpenStreetMap's Overpass API for
-   `highway=residential` roads near that point and picks a coordinate along
-   one of them. If Overpass is unreachable or has no data nearby, it falls
-   back to a uniformly-distributed random jitter within the configured
-   accuracy radius (never the raw centroid).
-3. **Locale inference** (`lib/locale.js`): country code + IANA timezone
-   (as a tiebreaker for multilingual countries, e.g. `CA`/`CH`) map to a
-   `navigator.language` / `navigator.languages` / `Accept-Language` bundle
-   from a static offline table.
-4. **Applying it to the page** (`content-scripts/`): an ISOLATED-world
-   "bridge" script reads the computed profile from `chrome.storage.local`
-   (the only place with access to it) and republishes it as a `CustomEvent`
-   on `document`. A MAIN-world "injector" script, running at
-   `document_start` — before any page script — listens for that event and
-   patches the platform APIs that leak location/timezone/locale.
-5. **Outgoing `Accept-Language` header**: a `declarativeNetRequest` dynamic
-   rule rewrites the `Accept-Language` request header to match, but only
-   while the language toggle is on.
+1. **出口 IP 检测**（`lib/providers.js`、`background/service-worker.js`）：后台 Service Worker 依次请求 IP 地理位置 provider 链（`ipapi.co` → `ipwho.is` → `freeipapi.com` → `ipinfo.io`），取第一个成功返回的结果。保留国家码、城市/省份/国家、经纬度、ISP、IANA 时区。
 
-## What gets patched
+2. **住宅坐标解析**（`lib/overpass.js`）：provider 返回的原始经纬度通常是数据中心或 ISP 机房，而非住宅地址。扩展会查询 OpenStreetMap Overpass API，在附近搜索 `highway=residential` 住宅道路并随机取其上一个点。若 Overpass 不可达或附近无数据，则回退到在配置精度半径内均匀分布的随机偏移（永远不会直接使用原始中心点）。
 
-| API | Behavior |
+3. **语言环境推断**（`lib/locale.js`）：国家码 + IANA 时区（用于消歧加拿大、瑞士等多语言国家）通过静态离线表映射到 `navigator.language` / `navigator.languages` / `Accept-Language` 语言包。
+
+4. **注入页面**（`content-scripts/`）：ISOLATED world 的"桥接"脚本读取 `chrome.storage.local` 中已计算好的配置（只有这个世界有权限访问），通过 DOM `CustomEvent` 转发给 MAIN world。MAIN world 的"注入"脚本在 `document_start` 执行——早于任何页面脚本——监听该事件并 patch 泄露位置/时区/语言的平台 API。
+
+5. **`Accept-Language` 请求头**：通过 `declarativeNetRequest` 动态规则改写出站请求头，仅在语言开关开启时生效。
+
+## 覆盖的 API
+
+| API | 行为 |
 |---|---|
-| `navigator.geolocation.getCurrentPosition` / `watchPosition` / `clearWatch` | Returns the resolved residential coordinate instead of the real GPS/Wi-Fi position; falls through to the native implementation when location spoofing is off. |
-| `navigator.permissions.query({name:'geolocation'})` | Reports `granted` when location spoofing is active; otherwise delegates to the native check. |
-| `Date.prototype.getTimezoneOffset` | DST-aware: recomputed per calling `Date` instance against the target IANA zone (not a single cached offset), via `Intl.DateTimeFormat.formatToParts`. |
-| `Date.prototype.toLocaleString/toLocaleDateString/toLocaleTimeString` | Default to the spoofed timezone when the caller didn't pass an explicit `timeZone` option, for internal consistency with the point below. |
-| `Intl.DateTimeFormat` (constructor default + `resolvedOptions().timeZone`) | Defaults `timeZone` to the spoofed zone and `locales` to the spoofed language list when the caller didn't specify either — implemented by forwarding to the *real* native constructor with injected defaults, so the returned object is a genuine `Intl.DateTimeFormat` instance, not a fake shim. |
-| `Intl.NumberFormat`, `Intl.Collator` (default locale) | Same forwarding-with-injected-defaults technique, locale only. |
-| `navigator.language` / `navigator.languages` | Overridden getters on the `Navigator` prototype. |
+| `navigator.geolocation.getCurrentPosition` / `watchPosition` / `clearWatch` | 返回解析后的住宅坐标而非真实 GPS/Wi-Fi 位置；位置开关关闭时透传原生实现 |
+| `navigator.permissions.query({name:'geolocation'})` | 位置开关开启时返回 `granted`；否则委托原生检查 |
+| `Date.prototype.getTimezoneOffset` | DST 感知：针对每个调用者 `Date` 实例，通过 `Intl.DateTimeFormat.formatToParts` 实时计算目标 IANA 时区偏移，而非缓存单一偏移值 |
+| `Date.prototype.toLocaleString` / `toLocaleDateString` / `toLocaleTimeString` | 调用者未传 `timeZone` 选项时默认使用伪装时区，保持内部一致性 |
+| `Intl.DateTimeFormat`（构造函数默认值 + `resolvedOptions().timeZone`）| 调用者未指定时，`timeZone` 默认为伪装时区，`locales` 默认为伪装语言列表——通过向真实原生构造函数注入默认值实现，返回的是真正的 `Intl.DateTimeFormat` 实例而非假冒的 shim |
+| `Intl.NumberFormat`、`Intl.Collator`（默认 locale）| 同上，仅注入 locale |
+| `navigator.language` / `navigator.languages` | 在 `Navigator` 原型上覆盖 getter |
 
-## Known limitation: the synchronous-API race window
+## 已知限制：同步 API 的竞态窗口
 
-`chrome.storage.local` is asynchronous even though several of the patched
-getters (`navigator.language`, `Date.prototype.getTimezoneOffset`,
-`Intl.DateTimeFormat` defaults) are synchronous. The MAIN-world injector
-patches these functions immediately at `document_start`, but the *values*
-they should return only arrive once the ISOLATED bridge's `chrome.storage`
-read resolves and dispatches its event — typically within a few
-milliseconds, and normally before the page's own scripts run, but this is
-not a hard guarantee for a script that reads these values in its very first
-synchronous tick. Until the payload arrives, these getters fall back to the
-real, un-spoofed value. This is a structural limitation of MV3's async
-storage API, not a bug, and is called out here rather than papered over.
+`chrome.storage.local` 是异步的，但部分被 patch 的 getter（`navigator.language`、`Date.prototype.getTimezoneOffset`、`Intl.DateTimeFormat` 默认值）是同步的。MAIN world 注入脚本在 `document_start` 立即 patch 这些函数，但它们应返回的*值*要等到 ISOLATED bridge 的 `chrome.storage` 读取完成并派发事件后才能到达——通常只需几毫秒，一般早于页面自身脚本执行，但对于在最初同步 tick 就读取这些值的脚本无法做出硬保证。在 payload 到达之前，这些 getter 会回退到真实的未伪装值。这是 MV3 异步存储 API 的结构性限制，不是 bug。
 
-Async APIs (`getCurrentPosition`, `watchPosition`, `permissions.query`) don't
-have this problem — they simply wait for the payload before resolving, which
-is indistinguishable from ordinary GPS/network latency.
+异步 API（`getCurrentPosition`、`watchPosition`、`permissions.query`）没有这个问题——它们直接等待 payload 到达后再返回，与正常的 GPS/网络延迟无法区分。
 
-## Privacy model
+## 隐私模型
 
-- **No telemetry, no analytics, no accounts, no remote config.** The
-  extension does not phone home to any server operated by its developer —
-  there isn't one.
-- **No page content is read.** The MAIN-world injector only patches function
-  references; it never inspects the DOM, page scripts, or page-supplied
-  data. The ISOLATED-world bridge only reads `chrome.storage.local` and
-  writes one `CustomEvent`.
-- **Storage is 100% local.** Every setting and every derived value (IP,
-  location, timezone, locale, ISP) lives in `chrome.storage.local` only.
-  Nothing uses `chrome.storage.sync`, cookies, or any server-side store.
-- **The only outbound network requests** this extension makes are:
-  - to the IP-geolocation providers listed above, to learn the current
-    egress IP's country/city/coordinates/ISP/timezone;
-  - to OpenStreetMap's Overpass API, to find a plausible residential
-    coordinate near that point.
-  Both are necessary to compute the override values and match what a real
-  site could already infer about your network position from your IP address
-  alone — this extension does not increase what's learnable about you from a
-  connecting server's point of view; it makes the browser's own
-  self-reported signals consistent with it.
-- **The optional `ipinfo.io` token** is entered by the user in the popup,
-  stored only in `chrome.storage.local`, and only ever sent to `ipinfo.io`
-  itself as a query parameter on requests the extension already makes to
-  that provider.
+- **无 telemetry、无统计分析、无账号、无远程配置。** 扩展不会向任何服务器发送数据，开发者也没有运营任何服务器。
+- **不读取页面内容。** MAIN world 注入脚本仅 patch 函数引用，从不检查 DOM、页面脚本或页面数据。ISOLATED world 桥接脚本只读取 `chrome.storage.local` 并派发一个 `CustomEvent`。
+- **存储 100% 本地化。** 所有设置和计算结果（IP、位置、时区、语言、ISP）只存在 `chrome.storage.local` 中，不使用 `chrome.storage.sync`、cookie 或任何服务端存储。
+- **唯一的出站网络请求**：
+  - 请求上述 IP 地理位置 provider，获取当前出口 IP 的国家/城市/坐标/ISP/时区；
+  - 请求 OpenStreetMap Overpass API，查找附近合理的住宅坐标。
+  这两类请求都是计算覆盖值的必要手段，与真实网站仅凭 IP 地址已能推断的信息相同——扩展不会增加连接服务器所能获知的信息，只是让浏览器自身上报的信号与之保持一致。
+- **可选的 `ipinfo.io` token** 由用户在 popup 中填写，仅存储在 `chrome.storage.local`，只在扩展向 `ipinfo.io` 发起的请求中以查询参数方式附带。
 
-## Settings (popup)
+## 弹窗设置
 
-- Toggle location / timezone / language spoofing independently.
-- Accuracy preset (precise ~100m / balanced ~500m / city ~3000m) — also
-  controls the Overpass search radius and the jitter fallback radius.
-- Refresh interval (minutes) for automatic re-detection via `chrome.alarms`.
-- Optional `ipinfo.io` token for a higher provider rate limit.
-- Manual "refresh now" button.
+- 独立开关：位置伪装 / 时区伪装 / 语言伪装
+- 精度预设：精确（~100m）/ 均衡（~500m）/ 城市级（~3000m）——同时控制 Overpass 搜索半径和 jitter 回退半径
+- 自动刷新间隔（分钟），通过 `chrome.alarms` 定时重新检测
+- 可选 `ipinfo.io` token，提升 provider 请求配额
+- 手动刷新按钮
 
-## Development
+## 开发
 
 ```sh
 npm test
 ```
 
-Runs the Node test suite (`node --test`) covering:
+运行 Node 测试套件（`node --test`），覆盖：
 
-- DST-aware timezone offset math, including spring-forward/fall-back edge
-  instants and southern-hemisphere-inverted DST (`tests/tz.test.js`), plus a
-  cross-check that the formula inlined into the MAIN-world content script
-  (which can't `import` — see below) stays byte-for-byte equivalent to the
-  tested `lib/tz.js` implementation (`tests/injector-tz-sync.test.js`).
-- Locale bundle inference, including multilingual-country timezone
-  disambiguation and header formatting (`tests/locale.test.js`).
-- Provider response parsing and fallback ordering for all four IP
-  geolocation providers (`tests/providers.test.js`).
-- Overpass query construction, response parsing, and jitter fallback
-  geometry (`tests/overpass.test.js`).
-- Manifest content-script injection order — the MAIN-world injector must be
-  declared before the ISOLATED-world bridge so its event listener exists
-  before the bridge dispatches (`tests/manifest.test.js`).
-- Settings normalization and the declarativeNetRequest rule builder
-  (`tests/storage-and-dnr.test.js`).
+- DST 感知时区偏移计算，含夏令时切换瞬间和南半球反向 DST（`tests/tz.test.js`），以及内联在 MAIN world content script 中的时区公式与 `lib/tz.js` 实现一致性的交叉验证（`tests/injector-tz-sync.test.js`）
+- 语言环境推断，含多语言国家的时区消歧和 Accept-Language 头格式化（`tests/locale.test.js`）
+- 四个 IP 地理位置 provider 的响应解析和 fallback 顺序（`tests/providers.test.js`）
+- Overpass 查询构造、响应解析和 jitter 回退几何（`tests/overpass.test.js`）
+- manifest content script 注入顺序——MAIN world 注入脚本必须先于 ISOLATED world 桥接脚本声明，保证事件监听器在桥接派发前已就绪（`tests/manifest.test.js`）
+- 设置规范化和 declarativeNetRequest 规则构造（`tests/storage-and-dnr.test.js`）
 
-### Why `content-scripts/main-injector.js` doesn't `import` from `lib/`
+### 为什么 `content-scripts/main-injector.js` 不从 `lib/` import
 
-Content scripts registered via `manifest.json`'s `content_scripts` array run
-as classic (non-module) scripts and can't statically `import` other files,
-so the small DST-aware offset formula is inlined there directly rather than
-shared via a bundler. `tests/injector-tz-sync.test.js` extracts that inlined
-copy (between `// TZ_FORMULA_START`/`END` markers) and runs it against the
-same test matrix as `lib/tz.js`, so the two can't silently drift apart.
+通过 `manifest.json` `content_scripts` 数组注册的 content script 以经典（非模块）脚本运行，无法静态 import 其他文件，因此 DST 感知偏移公式直接内联在该文件中，而不通过打包工具共享。`tests/injector-tz-sync.test.js` 提取该内联副本（位于 `// TZ_FORMULA_START`/`END` 标记之间）并与 `lib/tz.js` 跑相同的测试矩阵，确保两者不会悄悄出现分歧。
 
-## Loading the extension
+## 加载扩展
 
-1. `chrome://extensions` → enable Developer Mode.
-2. "Load unpacked" → select this directory.
-3. Open the popup to configure toggles/accuracy/refresh interval, then hit
-   refresh (or wait for the automatic first refresh on install).
+1. 打开 `chrome://extensions` → 开启开发者模式
+2. 点击"加载已解压的扩展程序" → 选择本目录
+3. 打开弹窗配置各开关/精度/刷新间隔，点击刷新（或等待安装后的首次自动刷新）
