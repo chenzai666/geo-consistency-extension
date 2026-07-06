@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Geo-Locale Consistency</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Geo-Locale Consistency</h1>
+      <button id="refreshBtn" type="button" title="Refresh now">&#8635;</button>
+    </header>
+
+    <section id="status" class="card">
+      <div class="row"><span class="label">IP</span><span id="statIp">—</span></div>
+      <div class="row"><span class="label">Location</span><span id="statLocation">—</span></div>
+      <div class="row"><span class="label">ISP</span><span id="statIsp">—</span></div>
+      <div class="row"><span class="label">Timezone</span><span id="statTimezone">—</span></div>
+      <div class="row"><span class="label">Locale</span><span id="statLocale">—</span></div>
+      <div class="row"><span class="label">Coordinate source</span><span id="statCoordSource">—</span></div>
+      <div class="row"><span class="label">Provider</span><span id="statProvider">—</span></div>
+      <div class="row"><span class="label">Updated</span><span id="statUpdated">—</span></div>
+      <div id="statError" class="error" hidden></div>
+    </section>
+
+    <section class="card">
+      <div class="toggle-row">
+        <label for="locationSpoof">Spoof location</label>
+        <input type="checkbox" id="locationSpoof" />
+      </div>
+      <div class="toggle-row">
+        <label for="timezoneSpoof">Spoof timezone</label>
+        <input type="checkbox" id="timezoneSpoof" />
+      </div>
+      <div class="toggle-row">
+        <label for="languageSpoof">Spoof language</label>
+        <input type="checkbox" id="languageSpoof" />
+      </div>
+    </section>
+
+    <section class="card">
+      <label class="field-label" for="accuracy">Accuracy</label>
+      <select id="accuracy">
+        <option value="precise">Precise (~100m)</option>
+        <option value="balanced">Balanced (~500m)</option>
+        <option value="city">City-level (~3000m)</option>
+      </select>
+
+      <label class="field-label" for="refreshIntervalMinutes">Refresh interval (minutes)</label>
+      <input type="number" id="refreshIntervalMinutes" min="5" step="5" />
+
+      <label class="field-label" for="ipinfoToken">ipinfo.io token (optional)</label>
+      <input type="password" id="ipinfoToken" placeholder="stored locally only" autocomplete="off" />
+    </section>
+
+    <button id="saveBtn" type="button" class="primary">Save settings</button>
+    <p id="saveNote" class="note" hidden>Saved.</p>
+
+    <footer>
+      <p>No telemetry. No page content is read. Settings and computed overrides live only in this browser's local extension storage.</p>
+    </footer>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Geo-Locale Consistency",
+  "version": "1.0.0",
+  "description": "Keeps the browser's visible location, timezone, and language consistent with its current network egress IP. No telemetry, no accounts, no remote config — everything stays in chrome.storage.local.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "alarms", "declarativeNetRequest"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Geo-Locale Consistency"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-scripts/main-injector.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-scripts/isolated-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    }
+  ]
+}

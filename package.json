@@ -1,0 +1,10 @@
+{
+  "name": "geo-consistency-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MV3 extension keeping browser-visible geolocation, timezone, and locale consistent with the current egress IP.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}
