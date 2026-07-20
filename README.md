@@ -119,7 +119,7 @@ navigator.geolocation.getCurrentPosition(p =>
 
 4. **注入页面**（`content-scripts/`）：ISOLATED world 的"桥接"脚本读取 `chrome.storage.local` 中已计算好的配置（只有这个世界有权限访问），通过 DOM `CustomEvent` 转发给 MAIN world。MAIN world 的"注入"脚本在 `document_start` 执行——早于任何页面脚本——监听该事件并 patch 泄露位置/时区/语言的平台 API。
 
-5. **`Accept-Language` 请求头**：通过 `declarativeNetRequest` 动态规则改写出站请求头，仅在语言开关开启时生效。
+5. **`Accept-Language` 请求头**：通过 `declarativeNetRequest` 动态规则改写出站请求头，仅在语言开关开启时生效。规则覆盖文档/脚本/样式/图片/字体/媒体/WebSocket 等常规资源类型，也包括 `object`（`<object>`/`<embed>`）、`ping`（`navigator.sendBeacon()`、`<a ping>`）、`csp_report`（CSP 违规上报）——避免这几类请求单独漏掉、继续带着真实语言头。
 
 ## 覆盖的 API
 

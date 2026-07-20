@@ -39,3 +39,13 @@ test('buildAcceptLanguageRule shapes a valid declarativeNetRequest modifyHeaders
   assert.equal(rule.action.requestHeaders[0].value, 'de-DE,de;q=0.9,en;q=0.8');
   assert.ok(rule.condition.resourceTypes.includes('main_frame'));
 });
+
+test('buildAcceptLanguageRule covers beacon/plugin/report request types too, not just document+asset loads', () => {
+  // Otherwise navigator.sendBeacon()/<a ping> (ping), <object>/<embed> (object),
+  // and CSP violation reports (csp_report) would keep leaking the real
+  // Accept-Language while every other request type gets the spoofed one.
+  const rule = buildAcceptLanguageRule('ja-JP,ja;q=0.9');
+  for (const type of ['object', 'ping', 'csp_report']) {
+    assert.ok(rule.condition.resourceTypes.includes(type), `missing resourceType: ${type}`);
+  }
+});
