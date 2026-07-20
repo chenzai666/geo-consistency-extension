@@ -97,6 +97,19 @@
     };
   }
 
+  /**
+   * Shared default-`locales` resolution: an explicit argument always wins,
+   * otherwise falls back to the spoofed locale's language list (or
+   * `undefined`, i.e. the real native default, if language spoofing is off).
+   * Used independently of timezone spoofing by both patchIntl() and
+   * patchDate()'s withZone() below, matching how the languageSpoof and
+   * timezoneSpoof toggles are meant to work independently of each other.
+   */
+  function defaultLocales(explicitLocales) {
+    if (explicitLocales !== undefined) return explicitLocales;
+    return payload && payload.locale ? payload.locale.languages : undefined;
+  }
+
   // ---------------------------------------------------------------------
   // Shared DST-aware timezone offset math.
   // Kept byte-for-byte equivalent to lib/tz.js#getTimezoneOffsetForZone —
@@ -321,14 +334,22 @@
     const nativeToLocaleDateString = Date.prototype.toLocaleDateString;
     const nativeToLocaleTimeString = Date.prototype.toLocaleTimeString;
 
+    // Date.prototype.toLocaleString & co. are spec'd against the original
+    // %DateTimeFormat% intrinsic, not the mutable `Intl.DateTimeFormat`
+    // binding — patching that constructor (see patchIntl() below) has no
+    // effect on these methods, which is why they need their own patch here.
+    // locales and timeZone are resolved independently of each other so the
+    // languageSpoof and timezoneSpoof toggles keep working independently,
+    // same as Intl.DateTimeFormat's own behavior.
     function withZone(fn) {
       return function (locales, options) {
+        const finalLocales = defaultLocales(locales);
+        let finalOptions = options;
         if (payload && payload.timezone) {
-          const merged = { ...(options || {}) };
-          if (!merged.timeZone) merged.timeZone = payload.timezone;
-          return fn.call(this, locales, merged);
+          finalOptions = { ...(options || {}) };
+          if (!finalOptions.timeZone) finalOptions.timeZone = payload.timezone;
         }
-        return fn.call(this, locales, options);
+        return fn.call(this, finalLocales, finalOptions);
       };
     }
 
@@ -345,11 +366,6 @@
   // ---------------------------------------------------------------------
   (function patchIntl() {
     const NativeDateTimeFormat = Intl.DateTimeFormat;
-
-    function defaultLocales(explicitLocales) {
-      if (explicitLocales !== undefined) return explicitLocales;
-      return payload && payload.locale ? payload.locale.languages : undefined;
-    }
 
     function PatchedDateTimeFormat(locales, options) {
       const finalOptions = { ...(options || {}) };
