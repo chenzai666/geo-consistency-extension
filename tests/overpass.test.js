@@ -99,6 +99,13 @@ test('safeJitter with rng()=0 returns exactly the minimum-offset point (50m, nev
   assert.ok(Math.abs(d - 50) < 1, `expected ~50 m min offset, got ${d.toFixed(1)} m`);
 });
 
+test('safeJitter clamps a radius smaller than the 50m minimum instead of going negative', () => {
+  const point = safeJitter(52.52, 13.405, 10, () => 0.9);
+  assert.ok(Number.isFinite(point.lat) && Number.isFinite(point.lon));
+  const d = haversineMeters(52.52, 13.405, point.lat, point.lon);
+  assert.ok(d >= 49 && d <= 51, `expected ~50 m offset when radius < minimum, got ${d.toFixed(1)} m`);
+});
+
 test('safeJitter distribution is uniform over area, not clustered at center', () => {
   // Sample many points; roughly half should fall outside radius/sqrt(2)
   // (median radius for a uniform-area disk distribution).
@@ -170,6 +177,22 @@ test('resolveResidentialCoordinate falls back to jitter when Overpass returns no
     rng: () => 0.5,
   });
   assert.equal(point.source, 'jitter');
+});
+
+test('resolveResidentialCoordinate searches the full radius for the city-level (3000m) preset', async () => {
+  let capturedBody;
+  const fakeFetch = async (url, init) => {
+    capturedBody = init.body;
+    return { ok: true, json: async () => ({ elements: [] }) };
+  };
+  await resolveResidentialCoordinate({
+    lat: 52.52,
+    lon: 13.405,
+    radiusMeters: 3000,
+    fetchImpl: fakeFetch,
+    rng: () => 0.5,
+  });
+  assert.match(capturedBody, /around:3000,/);
 });
 
 function haversineMeters(lat1, lon1, lat2, lon2) {

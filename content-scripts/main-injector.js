@@ -59,6 +59,44 @@
     waiters.push(entry);
   }
 
+  /**
+   * Like onPayload, but keeps calling back on every later payload update too
+   * (settings toggled in the popup, IP refreshed, or — if the first payload
+   * hadn't arrived yet — the real payload finally showing up after the
+   * fallback timeout already fired once with null). Used by watchPosition so
+   * a long-lived subscription can migrate between native and spoofed mode
+   * instead of getting stuck with whatever was true at subscribe time.
+   * @returns {() => void} unsubscribe
+   */
+  function onEveryPayload(callback) {
+    let fired = false;
+    const timer = payloadReady
+      ? null
+      : setTimeout(() => {
+          if (!fired) {
+            fired = true;
+            callback(payload);
+          }
+        }, PAYLOAD_WAIT_TIMEOUT_MS);
+
+    const listener = () => {
+      fired = true;
+      if (timer) clearTimeout(timer);
+      callback(payload);
+    };
+    document.addEventListener(EVENT_NAME, listener, false);
+
+    if (payloadReady) {
+      fired = true;
+      callback(payload);
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener(EVENT_NAME, listener);
+    };
+  }
+
   // ---------------------------------------------------------------------
   // Shared DST-aware timezone offset math.
   // Kept byte-for-byte equivalent to lib/tz.js#getTimezoneOffsetForZone —
@@ -156,21 +194,60 @@
       },
     });
 
+    // options.maximumAge means "how stale a cached position may be", not a
+    // polling period — it is intentionally ignored here in favor of a fixed
+    // poll interval matching the native default staleness expectation.
+    const SPOOFED_POLL_INTERVAL_MS = 10000;
+
     Object.defineProperty(geo, 'watchPosition', {
       configurable: true,
       writable: true,
       value: function (successCallback, errorCallback, options) {
         const id = nextWatchId++;
-        onPayload((p) => {
-          if (!p || !p.location) {
-            const nativeId = nativeWatchPosition(successCallback, errorCallback, options);
-            watches.set(id, { nativeId });
-            return;
+        let mode = null; // 'native' | 'spoofed'
+        let nativeId = null;
+        let pollTimer = null;
+
+        function stopNative() {
+          if (nativeId != null) {
+            nativeClearWatch(nativeId);
+            nativeId = null;
           }
-          successCallback(buildPosition(p.location));
-          const intervalMs = Math.max(1000, (options && options.maximumAge) || 10000);
-          const timer = setInterval(() => successCallback(buildPosition(p.location)), intervalMs);
-          watches.set(id, { timer });
+        }
+        function stopSpoofed() {
+          if (pollTimer != null) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        }
+
+        // Re-evaluated on every payload update (not just once at subscribe
+        // time) so toggling "spoof location" in the popup, refreshing the
+        // egress IP, or a late-arriving first payload after the fallback
+        // timeout all migrate an already-active watch to the right mode.
+        function applyMode(p) {
+          const shouldSpoof = !!(p && p.location);
+          if (shouldSpoof && mode !== 'spoofed') {
+            stopNative();
+            mode = 'spoofed';
+            successCallback(buildPosition(p.location));
+            pollTimer = setInterval(() => {
+              if (payload && payload.location) successCallback(buildPosition(payload.location));
+            }, SPOOFED_POLL_INTERVAL_MS);
+          } else if (!shouldSpoof && mode !== 'native') {
+            stopSpoofed();
+            mode = 'native';
+            nativeId = nativeWatchPosition(successCallback, errorCallback, options);
+          }
+        }
+
+        const unsubscribe = onEveryPayload(applyMode);
+        watches.set(id, {
+          stop() {
+            unsubscribe();
+            stopNative();
+            stopSpoofed();
+          },
         });
         return id;
       },
@@ -182,8 +259,7 @@
       value: function (id) {
         const entry = watches.get(id);
         if (!entry) return;
-        if (entry.timer) clearInterval(entry.timer);
-        if (entry.nativeId != null) nativeClearWatch(entry.nativeId);
+        entry.stop();
         watches.delete(id);
       },
     });
@@ -263,13 +339,12 @@
   })();
 
   // ---------------------------------------------------------------------
-  // Intl.DateTimeFormat / Intl.NumberFormat / Intl.Collator default locale
-  // (+ default timeZone for DateTimeFormat)
+  // Intl.* default locale (+ default timeZone for DateTimeFormat).
+  // Covers every Intl constructor that resolves a default locale from the
+  // environment when called without an explicit `locales` argument.
   // ---------------------------------------------------------------------
   (function patchIntl() {
     const NativeDateTimeFormat = Intl.DateTimeFormat;
-    const NativeNumberFormat = Intl.NumberFormat;
-    const NativeCollator = Intl.Collator;
 
     function defaultLocales(explicitLocales) {
       if (explicitLocales !== undefined) return explicitLocales;
@@ -285,22 +360,27 @@
     }
     PatchedDateTimeFormat.prototype = NativeDateTimeFormat.prototype;
     PatchedDateTimeFormat.supportedLocalesOf = NativeDateTimeFormat.supportedLocalesOf.bind(NativeDateTimeFormat);
-
-    function PatchedNumberFormat(locales, options) {
-      return new NativeNumberFormat(defaultLocales(locales), options);
-    }
-    PatchedNumberFormat.prototype = NativeNumberFormat.prototype;
-    PatchedNumberFormat.supportedLocalesOf = NativeNumberFormat.supportedLocalesOf.bind(NativeNumberFormat);
-
-    function PatchedCollator(locales, options) {
-      return new NativeCollator(defaultLocales(locales), options);
-    }
-    PatchedCollator.prototype = NativeCollator.prototype;
-    PatchedCollator.supportedLocalesOf = NativeCollator.supportedLocalesOf.bind(NativeCollator);
-
     Object.defineProperty(Intl, 'DateTimeFormat', { configurable: true, writable: true, value: PatchedDateTimeFormat });
-    Object.defineProperty(Intl, 'NumberFormat', { configurable: true, writable: true, value: PatchedNumberFormat });
-    Object.defineProperty(Intl, 'Collator', { configurable: true, writable: true, value: PatchedCollator });
+
+    // NumberFormat/Collator/Segmenter/PluralRules/ListFormat/RelativeTimeFormat
+    // all share the same shape: pass through options untouched, only patch
+    // the default-locale resolution. RelativeTimeFormat/Segmenter aren't in
+    // every runtime, so each lookup is guarded.
+    ['NumberFormat', 'Collator', 'Segmenter', 'PluralRules', 'ListFormat', 'RelativeTimeFormat'].forEach(
+      (name) => {
+        const Native = Intl[name];
+        if (typeof Native !== 'function') return;
+
+        function Patched(locales, options) {
+          return new Native(defaultLocales(locales), options);
+        }
+        Patched.prototype = Native.prototype;
+        if (typeof Native.supportedLocalesOf === 'function') {
+          Patched.supportedLocalesOf = Native.supportedLocalesOf.bind(Native);
+        }
+        Object.defineProperty(Intl, name, { configurable: true, writable: true, value: Patched });
+      }
+    );
   })();
 
   // ---------------------------------------------------------------------

@@ -59,3 +59,11 @@ test('buildAcceptLanguageHeader floors q-value at 0.1 for long lists', () => {
   const header = buildAcceptLanguageHeader(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']);
   assert.ok(header.endsWith('l;q=0.1'));
 });
+
+test('previously-missing countries now resolve directly instead of falling back to the region default', () => {
+  assert.equal(inferLocaleBundle('HR', 'Europe/Zagreb').language, 'hr-HR');
+  assert.equal(inferLocaleBundle('MA', 'Africa/Casablanca').language, 'ar-MA');
+  assert.equal(inferLocaleBundle('IR', 'Asia/Tehran').language, 'fa-IR');
+  assert.equal(inferLocaleBundle('KZ', 'Asia/Almaty').language, 'kk-KZ');
+  assert.equal(inferLocaleBundle('LU', 'Europe/Luxembourg').language, 'fr-LU');
+});
