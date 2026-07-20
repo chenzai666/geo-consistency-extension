@@ -126,7 +126,7 @@ navigator.geolocation.getCurrentPosition(p =>
 | API | 行为 |
 |---|---|
 | `navigator.geolocation.getCurrentPosition` / `watchPosition` / `clearWatch` | 返回解析后的住宅坐标而非真实 GPS/Wi-Fi 位置；位置开关关闭时透传原生实现。`watchPosition` 以固定 10s 间隔轮询（不依赖调用方传入的 `maximumAge`），并在 payload 后续更新时（切换设置、刷新出口 IP、或首个 payload 姗姗来迟）自动在原生/伪装模式间切换，而不会卡在订阅时的初始状态 |
-| `navigator.permissions.query({name:'geolocation'})` | 位置开关开启时返回 `granted`；否则委托原生检查 |
+| `navigator.permissions.query({name:'geolocation'})` | 位置开关开启时返回 `granted`；否则委托原生检查。返回的 `PermissionStatus` 会持续跟踪位置开关的后续变化并触发 `change`/`onchange`——不会停留在查询那一刻的状态 |
 | `Date.prototype.getTimezoneOffset` | DST 感知：针对每个调用者 `Date` 实例，通过 `Intl.DateTimeFormat.formatToParts` 实时计算目标 IANA 时区偏移，而非缓存单一偏移值 |
 | `Date.prototype.toLocaleString` / `toLocaleDateString` / `toLocaleTimeString` | 调用者未传 `timeZone` 选项时默认使用伪装时区、未传 `locales` 参数时默认使用伪装语言列表，两者相互独立（分别只取决于时区伪装/语言伪装各自的开关），保持与 `Intl.DateTimeFormat` 一致的内部一致性。这几个方法绑定的是原始 `%DateTimeFormat%` intrinsic，patch 全局 `Intl.DateTimeFormat` 对它们不生效，因此单独 patch |
 | `Intl.DateTimeFormat`（构造函数默认值 + `resolvedOptions().timeZone`）| 调用者未指定时，`timeZone` 默认为伪装时区，`locales` 默认为伪装语言列表——通过向真实原生构造函数注入默认值实现，返回的是真正的 `Intl.DateTimeFormat` 实例而非假冒的 shim |
@@ -174,6 +174,7 @@ npm test
 - 设置规范化和 declarativeNetRequest 规则构造（`tests/storage-and-dnr.test.js`）
 - `content-scripts/isolated-bridge.js` 硬编码的 storage key 字符串与 `lib/storage-schema.js` 中 `STORAGE_KEYS` 的一致性校验（`tests/isolated-bridge-keys-sync.test.js`）
 - `Date.prototype.toLocaleString` 系列方法的伪装 locale/timeZone 相互独立生效，在隔离的 `node:vm` 沙箱里实际执行 `main-injector.js` 验证（`tests/injector-locale-timezone-independence.test.js`）
+- `navigator.permissions.query({name:'geolocation'})` 返回的 `PermissionStatus` 在位置开关后续变化时正确降级/触发 `onchange`，同样在隔离的 `node:vm` 沙箱里执行验证（`tests/injector-permissions-self-heal.test.js`）
 
 ### 为什么 `content-scripts/main-injector.js` 不从 `lib/` import
 

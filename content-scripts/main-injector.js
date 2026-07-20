@@ -287,11 +287,43 @@
 
     const nativeQuery = permissionsProto.query.bind(navigator.permissions);
 
+    // A page can hold onto the resolved PermissionStatus indefinitely and
+    // listen for `change`, so the fake status keeps tracking the
+    // locationSpoof toggle after resolution instead of freezing at 'granted'
+    // forever — if spoofing later turns off, it falls back to whatever the
+    // real browser permission actually is.
     function buildFakeGeolocationStatus() {
       const target = new EventTarget();
-      Object.defineProperty(target, 'state', { value: 'granted', enumerable: true });
+      let state = 'granted';
+      Object.defineProperty(target, 'state', {
+        configurable: true,
+        enumerable: true,
+        get: () => state,
+      });
       Object.defineProperty(target, 'name', { value: 'geolocation', enumerable: true });
       target.onchange = null;
+
+      function setState(next) {
+        if (next === state) return;
+        state = next;
+        if (typeof target.onchange === 'function') {
+          try {
+            target.onchange(new Event('change'));
+          } catch {
+            /* ignore, matches native fire-and-forget callback semantics */
+          }
+        }
+        target.dispatchEvent(new Event('change'));
+      }
+
+      onEveryPayload((p) => {
+        if (p && p.location) {
+          setState('granted');
+        } else {
+          nativeQuery({ name: 'geolocation' }).then((status) => setState(status.state));
+        }
+      });
+
       return target;
     }
 
